@@ -208,6 +208,8 @@ const initDB = async () => {
         email TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
         role VARCHAR(20) DEFAULT 'admin',
+        assigned_union TEXT,
+        position TEXT,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
       );
 
@@ -237,6 +239,7 @@ const initDB = async () => {
         student_category TEXT,
         telegram TEXT,
         "union" TEXT,
+        email TEXT,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
       );
 
@@ -297,6 +300,15 @@ const initDB = async () => {
         END IF;
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='messages' AND column_name='replied_by') THEN
           ALTER TABLE messages ADD COLUMN replied_by TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='admins' AND column_name='assigned_union') THEN
+          ALTER TABLE admins ADD COLUMN assigned_union TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='admins' AND column_name='position') THEN
+          ALTER TABLE admins ADD COLUMN position TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='executives' AND column_name='email') THEN
+          ALTER TABLE executives ADD COLUMN email TEXT;
         END IF;
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='categories' AND column_name='leader_name') THEN
           ALTER TABLE categories ADD COLUMN leader_name TEXT;
@@ -360,11 +372,11 @@ app.post("/api/auth/login", async (req, res) => {
     if (!match) return res.status(401).json({ error: "Invalid credentials" });
 
     const token = jwt.sign(
-      { id: admin.id, email: admin.email, role: admin.role },
+      { id: admin.id, email: admin.email, role: admin.role, assigned_union: admin.assigned_union, position: admin.position },
       process.env.JWT_SECRET || "fallback_secret_key_123",
       { expiresIn: "8h" },
     );
-    res.json({ token, user: { email: admin.email, role: admin.role } });
+    res.json({ token, user: { email: admin.email, role: admin.role, assigned_union: admin.assigned_union, position: admin.position } });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -437,11 +449,16 @@ app.post(
 // ==========================================
 // EXECUTIVES
 // ==========================================
-app.get("/api/executives", async (req, res) => {
+app.get("/api/executives", optionalToken, async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      "SELECT * FROM executives ORDER BY row_level ASC, id ASC",
-    );
+    let query = 'SELECT * FROM executives';
+    let params = [];
+    if (req.user && req.user.role === "admin" && req.user.assigned_union) {
+      query += ' WHERE "union" = $1';
+      params.push(req.user.assigned_union);
+    }
+    query += " ORDER BY row_level ASC, name ASC";
+    const { rows } = await pool.query(query, params);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch executives" });
@@ -479,13 +496,14 @@ app.post(
         icon,
         student_category,
         telegram,
+        email,
       } = req.body;
       if (!name || !role)
         return res.status(400).json({ error: "Name and role are required" });
       const image = req.file?.path || req.body.image || null;
       const { rows } = await pool.query(
-        `INSERT INTO executives (name, role, phone, department, "union", row_level, icon, image, student_category, telegram)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+        `INSERT INTO executives (name, role, phone, department, "union", row_level, icon, image, student_category, telegram, email)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
         [
           name,
           role,
@@ -497,6 +515,7 @@ app.post(
           image,
           student_category,
           telegram,
+          email,
         ],
       );
       notifyClients("executive_added", rows[0]);
@@ -524,6 +543,7 @@ app.put(
         icon,
         student_category,
         telegram,
+        email,
       } = req.body;
       const current = await pool.query(
         "SELECT image FROM executives WHERE id = $1",
@@ -534,8 +554,8 @@ app.put(
       const image = req.file?.path || req.body.image || current.rows[0].image;
       const { rows } = await pool.query(
         `UPDATE executives SET name=$1, role=$2, phone=$3, department=$4, "union"=$5,
-         row_level=$6, icon=$7, image=$8, student_category=$9, telegram=$10
-         WHERE id=$11 RETURNING *`,
+         row_level=$6, icon=$7, image=$8, student_category=$9, telegram=$10, email=$11
+         WHERE id=$12 RETURNING *`,
         [
           name,
           role,
@@ -547,6 +567,7 @@ app.put(
           image,
           student_category,
           telegram,
+          email,
           id,
         ],
       );
@@ -577,14 +598,61 @@ app.delete("/api/executives/:id", verifyToken, async (req, res) => {
 // ==========================================
 // RESOURCES
 // ==========================================
-app.get("/api/resources", async (req, res) => {
+app.get("/api/plans", verifyToken, async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      "SELECT * FROM resources ORDER BY created_at DESC",
-    );
+    let query = "SELECT * FROM plans";
+    let params = [];
+    if (req.user.role === "admin" && req.user.assigned_union) {
+      query += " WHERE category = $1";
+      params.push(req.user.assigned_union);
+    }
+    query += " ORDER BY created_at DESC";
+    const { rows } = await pool.query(query, params);
     res.json(rows);
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch resources" });
+    res.status(500).json({ error: "Failed to fetch plans" });
+  }
+});
+
+app.get("/api/members", verifyToken, async (req, res) => {
+  try {
+    const { status, category, position } = req.query;
+    let query = "SELECT * FROM members WHERE 1=1";
+    let params = [];
+
+    if (status) {
+      query += ` AND status = $${params.length + 1}`;
+      params.push(status);
+    }
+    if (category) {
+      query += ` AND category = $${params.length + 1}`;
+      params.push(category);
+    }
+    if (position) {
+      query += ` AND position = $${params.length + 1}`;
+      params.push(position);
+    }
+
+    // Role-based filtering for Admins
+    if (req.user.role === "admin") {
+      // Always filter by union if assigned
+      if (req.user.assigned_union) {
+        query += ` AND category = $${params.length + 1}`;
+        params.push(req.user.assigned_union);
+      }
+      // ONLY filter by position for PENDING requests (Approval Matching)
+      // If it's the approved directory, they see everyone in their union
+      if (status === "pending" && req.user.position) {
+        query += ` AND position = $${params.length + 1}`;
+        params.push(req.user.position);
+      }
+    }
+
+    query += " ORDER BY joined_date DESC";
+    const { rows } = await pool.query(query, params);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch members" });
   }
 });
 
@@ -645,7 +713,7 @@ app.delete("/api/resources/:id", verifyToken, async (req, res) => {
 app.get("/api/users", verifySuperAdmin, async (req, res) => {
   try {
     const result = await pool.query(
-      "SELECT id, email, role, created_at FROM admins ORDER BY created_at DESC",
+      "SELECT id, email, role, assigned_union, position, created_at FROM admins ORDER BY created_at DESC",
     );
     res.json(result.rows);
   } catch (err) {
@@ -654,19 +722,35 @@ app.get("/api/users", verifySuperAdmin, async (req, res) => {
 });
 
 app.post("/api/admins", verifySuperAdmin, async (req, res) => {
-  const { email, password, role = "admin" } = req.body;
+  const { email, password, role = "admin", assigned_union, position } = req.body;
   if (!email || !password)
     return res.status(400).json({ error: "Email and password required" });
   try {
     const hash = await bcrypt.hash(password.trim(), 10);
     const result = await pool.query(
-      "INSERT INTO admins (email, password_hash, role) VALUES ($1, $2, $3) RETURNING id, email, role, created_at",
-      [email.trim().toLowerCase(), hash, role],
+      "INSERT INTO admins (email, password_hash, role, assigned_union, position) VALUES ($1, $2, $3, $4, $5) RETURNING id, email, role, assigned_union, position, created_at",
+      [email.trim().toLowerCase(), hash, role, assigned_union, position],
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
     if (err.code === "23505")
       return res.status(400).json({ error: "Email already exists" });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/admins/:id", verifySuperAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { role, assigned_union, position } = req.body;
+  try {
+    const { rows } = await pool.query(
+      "UPDATE admins SET role=$1, assigned_union=$2, position=$3 WHERE id=$4 RETURNING id, email, role, assigned_union, position, created_at",
+      [role, assigned_union, position, id],
+    );
+    if (rows.length === 0)
+      return res.status(404).json({ error: "Admin not found" });
+    res.json(rows[0]);
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -999,63 +1083,19 @@ app.delete("/api/meetings/:id", verifyToken, async (req, res) => {
 // MEMBERS
 // ==========================================
 
-// FIX: use optionalToken so public requests don't crash on req.user
-app.get("/api/members", optionalToken, async (req, res) => {
-  try {
-    const { category, union, search, status } = req.query;
-    const params = [];
-    let idx = 1;
-    let conditions = [];
-
-    // Public sees only approved; authenticated admins can filter by status
-    if (!req.user) {
-      conditions.push(`status = 'approved'`);
-    } else if (status) {
-      conditions.push(`status = $${idx}`);
-      params.push(status);
-      idx++;
-    }
-
-    if (category) {
-      conditions.push(`category = $${idx}`);
-      params.push(category);
-      idx++;
-    }
-
-    if (union === "true") {
-      conditions.push(`(category ILIKE '%union%' OR position ILIKE '%union%')`);
-    }
-
-    if (search) {
-      conditions.push(`(name ILIKE $${idx} OR email ILIKE $${idx})`);
-      params.push(`%${search}%`);
-      idx++;
-    }
-
-    const where =
-      conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-    const query = `SELECT * FROM members ${where} ORDER BY joined_date DESC`;
-    const result = await pool.query(query, params);
-
-    // Non-superadmin role filter for union view
-    let rows = result.rows;
-    if (req.user && req.user.role !== "superadmin" && union === "true") {
-      rows = rows.filter((m) => m.category === req.user.role);
-    }
-
-    res.json(rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 app.get("/api/members/count/pending", verifyToken, async (req, res) => {
   try {
     let query = "SELECT COUNT(*) FROM members WHERE status = 'pending'";
-    const params = [];
-    if (req.user.role !== "superadmin") {
-      query += " AND category = $1";
-      params.push(req.user.role);
+    let params = [];
+    if (req.user.role === "admin") {
+      if (req.user.assigned_union) {
+        query += " AND category = $1";
+        params.push(req.user.assigned_union);
+      }
+      if (req.user.position) {
+        query += ` AND position = $${params.length + 1}`;
+        params.push(req.user.position);
+      }
     }
     const { rows } = await pool.query(query, params);
     res.json({ count: parseInt(rows[0].count) });
@@ -1203,6 +1243,36 @@ app.patch("/api/members/:id/status", verifyToken, async (req, res) => {
     );
     if (rows.length === 0)
       return res.status(404).json({ error: "Member not found" });
+
+    if (status === "approved") {
+      const mailOptions = {
+        from: `"Samara Peace Forum" <${process.env.SMTP_USER}>`,
+        to: rows[0].email,
+        subject: "Application Approved - Samara Peace Forum",
+        html: `
+          <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px;">
+            <h2 style="color: #059669;">Welcome, ${rows[0].name}!</h2>
+            <p>Your application for the <strong>Samara Peace Forum Union</strong> has been officially approved by the administration.</p>
+            <div style="background: #f8fafc; padding: 15px; border-radius: 8px; margin: 20px 0;">
+              <p style="margin: 0; font-size: 14px;"><strong>Institutional Role:</strong> ${rows[0].position || "Member"}</p>
+              <p style="margin: 5px 0 0; font-size: 14px;"><strong>Jurisdiction:</strong> ${rows[0].category}</p>
+            </div>
+            <p>You can now access the administrative portal using your institutional email.</p>
+            <p><strong>Temporary Access Key:</strong> 12345678</p>
+            <div style="margin-top: 25px;">
+              <a href="${process.env.APP_URL || 'http://localhost:5173'}/login" style="display: inline-block; background: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold;">Access Dashboard</a>
+            </div>
+            <p style="font-size: 11px; color: #64748b; margin-top: 40px; border-top: 1px solid #e2e8f0; padding-top: 15px;">
+              This is an official institutional message from the Samara Peace Forum Union. Please change your temporary password upon first entry.
+            </p>
+          </div>
+        `,
+      };
+      transporter.sendMail(mailOptions).catch((err) => {
+        console.error("❌ Approval Email Error:", err);
+      });
+    }
+
     notifyClients("member_updated", rows[0]);
     res.json(rows[0]);
   } catch (err) {
