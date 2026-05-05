@@ -354,6 +354,14 @@ const initDB = async () => {
 };
 
 // ==========================================
+// route folder
+// ==========================================
+app.get("/api/route/folder", (req, res) => {
+  res.json({ success: true });
+  // message browser display server running not console
+  res.message("server running");
+});
+// ==========================================
 // AUTH
 // ==========================================
 app.post("/api/auth/login", async (req, res) => {
@@ -372,11 +380,25 @@ app.post("/api/auth/login", async (req, res) => {
     if (!match) return res.status(401).json({ error: "Invalid credentials" });
 
     const token = jwt.sign(
-      { id: admin.id, email: admin.email, role: admin.role, assigned_union: admin.assigned_union, position: admin.position },
+      {
+        id: admin.id,
+        email: admin.email,
+        role: admin.role,
+        assigned_union: admin.assigned_union,
+        position: admin.position,
+      },
       process.env.JWT_SECRET || "fallback_secret_key_123",
       { expiresIn: "8h" },
     );
-    res.json({ token, user: { email: admin.email, role: admin.role, assigned_union: admin.assigned_union, position: admin.position } });
+    res.json({
+      token,
+      user: {
+        email: admin.email,
+        role: admin.role,
+        assigned_union: admin.assigned_union,
+        position: admin.position,
+      },
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -451,7 +473,7 @@ app.post(
 // ==========================================
 app.get("/api/executives", optionalToken, async (req, res) => {
   try {
-    let query = 'SELECT * FROM executives';
+    let query = "SELECT * FROM executives";
     let params = [];
     if (req.user && req.user.role === "admin" && req.user.assigned_union) {
       query += ' WHERE "union" = $1';
@@ -658,7 +680,9 @@ app.get("/api/members", verifyToken, async (req, res) => {
 
 app.get("/api/resources", verifyToken, async (req, res) => {
   try {
-    const { rows } = await pool.query("SELECT * FROM resources ORDER BY created_at DESC");
+    const { rows } = await pool.query(
+      "SELECT * FROM resources ORDER BY created_at DESC",
+    );
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch resources" });
@@ -731,7 +755,13 @@ app.get("/api/users", verifySuperAdmin, async (req, res) => {
 });
 
 app.post("/api/admins", verifySuperAdmin, async (req, res) => {
-  const { email, password, role = "admin", assigned_union, position } = req.body;
+  const {
+    email,
+    password,
+    role = "admin",
+    assigned_union,
+    position,
+  } = req.body;
   if (!email || !password)
     return res.status(400).json({ error: "Email and password required" });
   try {
@@ -1028,16 +1058,27 @@ app.post("/api/meetings", verifyToken, async (req, res) => {
   try {
     const { title, description, date, location, category, status } = req.body;
     // Safely default to "General" if superadmin didn't provide a category
-    const finalCategory = req.user.role === "superadmin" ? (category || "General") : req.user.role;
+    const finalCategory =
+      req.user.role === "superadmin" ? category || "General" : req.user.role;
 
     if (!title || !date || !finalCategory) {
-      return res.status(400).json({ error: "Title, date, and category are required" });
+      return res
+        .status(400)
+        .json({ error: "Title, date, and category are required" });
     }
 
     const { rows } = await pool.query(
       `INSERT INTO meetings (title, description, date, location, category, status, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [title, description, date, location, finalCategory, status || "upcoming", req.user.email]
+      [
+        title,
+        description,
+        date,
+        location,
+        finalCategory,
+        status || "upcoming",
+        req.user.email,
+      ],
     );
     notifyClients("meeting_added", rows[0]);
     res.status(201).json(rows[0]);
@@ -1051,17 +1092,24 @@ app.put("/api/meetings/:id", verifyToken, async (req, res) => {
     const { id } = req.params;
     const { title, description, date, location, status } = req.body;
 
-    const check = await pool.query("SELECT category FROM meetings WHERE id = $1", [id]);
-    if (check.rows.length === 0) return res.status(404).json({ error: "Meeting not found" });
+    const check = await pool.query(
+      "SELECT category FROM meetings WHERE id = $1",
+      [id],
+    );
+    if (check.rows.length === 0)
+      return res.status(404).json({ error: "Meeting not found" });
 
-    if (req.user.role !== "superadmin" && req.user.role !== check.rows[0].category) {
+    if (
+      req.user.role !== "superadmin" &&
+      req.user.role !== check.rows[0].category
+    ) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
     const { rows } = await pool.query(
       `UPDATE meetings SET title=$1, description=$2, date=$3, location=$4, status=$5
        WHERE id=$6 RETURNING *`,
-      [title, description, date, location, status, id]
+      [title, description, date, location, status, id],
     );
     notifyClients("meeting_updated", rows[0]);
     res.json(rows[0]);
@@ -1073,10 +1121,17 @@ app.put("/api/meetings/:id", verifyToken, async (req, res) => {
 app.delete("/api/meetings/:id", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const check = await pool.query("SELECT category FROM meetings WHERE id = $1", [id]);
-    if (check.rows.length === 0) return res.status(404).json({ error: "Meeting not found" });
+    const check = await pool.query(
+      "SELECT category FROM meetings WHERE id = $1",
+      [id],
+    );
+    if (check.rows.length === 0)
+      return res.status(404).json({ error: "Meeting not found" });
 
-    if (req.user.role !== "superadmin" && req.user.role !== check.rows[0].category) {
+    if (
+      req.user.role !== "superadmin" &&
+      req.user.role !== check.rows[0].category
+    ) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -1147,7 +1202,7 @@ app.post(
           .status(403)
           .json({ error: "Registrations are currently closed." });
 
-      const defaultPassword = '12345678';
+      const defaultPassword = "12345678";
       const hash = await bcrypt.hash(defaultPassword, 10);
 
       const result = await pool.query(
@@ -1269,7 +1324,7 @@ app.patch("/api/members/:id/status", verifyToken, async (req, res) => {
             <p>You can now access the administrative portal using your institutional email.</p>
             <p><strong>Temporary Access Key:</strong> 12345678</p>
             <div style="margin-top: 25px;">
-              <a href="${process.env.APP_URL || 'http://localhost:5173'}/login" style="display: inline-block; background: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold;">Access Dashboard</a>
+              <a href="${process.env.APP_URL || "http://localhost:5173"}/login" style="display: inline-block; background: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold;">Access Dashboard</a>
             </div>
             <p style="font-size: 11px; color: #64748b; margin-top: 40px; border-top: 1px solid #e2e8f0; padding-top: 15px;">
               This is an official institutional message from the Samara Peace Forum Union. Please change your temporary password upon first entry.
