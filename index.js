@@ -656,6 +656,15 @@ app.get("/api/members", verifyToken, async (req, res) => {
   }
 });
 
+app.get("/api/resources", verifyToken, async (req, res) => {
+  try {
+    const { rows } = await pool.query("SELECT * FROM resources ORDER BY created_at DESC");
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch resources" });
+  }
+});
+
 app.post("/api/resources", verifyToken, async (req, res) => {
   try {
     const { name, type, size, category, url } = req.body;
